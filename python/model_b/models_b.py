@@ -140,12 +140,28 @@ def train_random_forest_walk_forward(df: pd.DataFrame,
             'description': '2008 Financial Crisis'
         },
         {
+            'name': 'split_2018_try',
+            'train_start': '2003-01-01',
+            'train_end': '2017-12-31',
+            'test_start': '2018-01-01',
+            'test_end': '2018-12-31',
+            'description': '2018 Turkish Lira Currency Crisis'
+        },
+        {
             'name': 'split_2020',
             'train_start': '2003-01-01',
             'train_end': '2019-12-31',
             'test_start': '2020-01-01',
             'test_end': '2020-12-31',
             'description': 'COVID-19 Crash'
+        },
+        {
+            'name': 'split_2021_turkey',
+            'train_start': '2003-01-01',
+            'train_end': '2020-12-31',
+            'test_start': '2021-01-01',
+            'test_end': '2024-12-31',
+            'description': 'Ongoing Turkey Economic Crisis 2021-2024'
         }
     ]
     
@@ -280,6 +296,118 @@ def train_random_forest_walk_forward(df: pd.DataFrame,
     
     return results
 
+
+def train_ols_walk_forward(df: pd.DataFrame,
+                           target_col: str = 'ISE_USD',
+                           feature_cols: List[str] = None) -> Dict:
+    """OLS regression with the same walk-forward splits as the RF model.
+
+    Used for the three-model comparison table in the dashboard.
+    """
+    try:
+        import statsmodels.api as sm
+    except ImportError:
+        print("  statsmodels not installed — skipping OLS")
+        return {}
+
+    # Fixed parsimonious feature set — OLS is sensitive to multicollinearity
+    # so we restrict to 10 economically motivated features rather than all columns
+    OLS_FEATURES = ['SP500', 'DAX', 'FTSE', 'NIKKEI', 'BOVESPA', 'EU', 'EM',
+                    'VIX', 'DXY', 'mean_corr']
+    if feature_cols is None:
+        feature_cols = [c for c in OLS_FEATURES if c in df.columns]
+
+    splits = [
+        {'name': 'split_2008',      'train_start': '2003-01-01', 'train_end': '2007-12-31',
+         'test_start': '2008-01-01', 'test_end': '2008-12-31'},
+        {'name': 'split_2018_try',  'train_start': '2003-01-01', 'train_end': '2017-12-31',
+         'test_start': '2018-01-01', 'test_end': '2018-12-31'},
+        {'name': 'split_2020',      'train_start': '2003-01-01', 'train_end': '2019-12-31',
+         'test_start': '2020-01-01', 'test_end': '2020-12-31'},
+        {'name': 'split_2021_turkey', 'train_start': '2003-01-01', 'train_end': '2020-12-31',
+         'test_start': '2021-01-01', 'test_end': '2024-12-31'},
+    ]
+
+    results = {}
+    for sp in splits:
+        tr = df.loc[sp['train_start']:sp['train_end']].dropna(subset=[target_col])
+        te = df.loc[sp['test_start']:sp['test_end']].dropna(subset=[target_col])
+        feats = [c for c in feature_cols if c in tr.columns and c in te.columns]
+        if len(tr) < 20 or len(te) < 5 or not feats:
+            continue
+        X_tr = sm.add_constant(tr[feats].fillna(0))
+        X_te = sm.add_constant(te[feats].fillna(0))
+        model = sm.OLS(tr[target_col], X_tr).fit()
+        y_pred = model.predict(X_te)
+        y_true = te[target_col]
+        rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+        results[sp['name']] = {
+            'r2':   round(float(r2_score(y_true, y_pred)), 4),
+            'rmse': round(rmse, 4),
+            'mae':  round(float(mean_absolute_error(y_true, y_pred)), 4),
+        }
+        if 'regime' in te.columns:
+            results[sp['name']].update(compute_regime_metrics(y_true, y_pred, te['regime']))
+        print(f"  OLS {sp['name']}: R²={results[sp['name']]['r2']}")
+    return results
+
+
+def train_var_walk_forward(df: pd.DataFrame,
+                           target_col: str = 'ISE_USD',
+                           n_features: int = 5) -> Dict:
+    """VAR baseline model with same splits.
+
+    Uses top-n features by variance to keep model parsimony
+    (VAR is sensitive to dimensionality).
+    """
+    try:
+        from statsmodels.tsa.vector_ar.var_model import VAR
+    except ImportError:
+        print("  statsmodels not installed — skipping VAR")
+        return {}
+
+    # Fixed companion variables — VAR needs stationary, non-colinear series
+    VAR_COMPANIONS = ['SP500', 'DAX', 'VIX', 'DXY', 'mean_corr']
+    top_feats = [target_col] + [c for c in VAR_COMPANIONS if c in df.columns and c != target_col]
+
+    splits = [
+        {'name': 'split_2008',      'train_start': '2003-01-01', 'train_end': '2007-12-31',
+         'test_start': '2008-01-01', 'test_end': '2008-12-31'},
+        {'name': 'split_2018_try',  'train_start': '2003-01-01', 'train_end': '2017-12-31',
+         'test_start': '2018-01-01', 'test_end': '2018-12-31'},
+        {'name': 'split_2020',      'train_start': '2003-01-01', 'train_end': '2019-12-31',
+         'test_start': '2020-01-01', 'test_end': '2020-12-31'},
+        {'name': 'split_2021_turkey', 'train_start': '2003-01-01', 'train_end': '2020-12-31',
+         'test_start': '2021-01-01', 'test_end': '2024-12-31'},
+    ]
+
+    results = {}
+    for sp in splits:
+        feats = [c for c in top_feats if c in df.columns]
+        tr = df.loc[sp['train_start']:sp['train_end'], feats].dropna()
+        te = df.loc[sp['test_start']:sp['test_end'], feats].dropna()
+        if len(tr) < 20 or len(te) < 5:
+            continue
+        try:
+            var_m = VAR(tr)
+            order  = var_m.select_order(maxlags=4).selected_orders.get('aic', 2)
+            fitted = var_m.fit(maxlags=max(1, order), ic=None)
+            preds, history = [], list(tr.values[-fitted.k_ar:])
+            for j in range(len(te)):
+                fc = fitted.forecast(np.array(history), steps=1)[0]
+                preds.append(fc[0])
+                history = history[1:] + [list(te.iloc[j])]
+            y_true = te[target_col].values
+            y_pred = np.array(preds)
+            results[sp['name']] = {
+                'r2':   round(float(r2_score(y_true, y_pred)), 4),
+                'rmse': round(float(np.sqrt(mean_squared_error(y_true, y_pred))), 4),
+                'mae':  round(float(mean_absolute_error(y_true, y_pred)), 4),
+            }
+            print(f"  VAR {sp['name']}: R²={results[sp['name']]['r2']}")
+        except Exception as e:
+            print(f"  VAR {sp['name']} failed: {e}")
+    return results
 
 
 def validate_crisis_prediction(df: pd.DataFrame) -> Dict:

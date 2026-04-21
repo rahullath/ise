@@ -56,11 +56,12 @@ def fetch_macro_data(api_key: str = None,
     
     # Define series IDs and their display names
     series = {
-        'VIXCLS': 'VIX',
-        'T10Y2Y': 'YIELD_SPREAD',
-        'TEDRATE': 'TED_SPREAD',
+        'VIXCLS':   'VIX',
+        'T10Y2Y':   'YIELD_SPREAD',
+        'TEDRATE':  'TED_SPREAD',
         'FEDFUNDS': 'FED_FUNDS',
-        'BAA10Y': 'CREDIT_SPREAD'
+        'BAA10Y':   'CREDIT_SPREAD',
+        'DGS10':    'US_10Y_YIELD',   # EM capital outflow signal
     }
     
     print(f"Fetching macro data from FRED API")

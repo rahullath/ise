@@ -297,135 +297,81 @@ def normalize_macro_signals(df: pd.DataFrame) -> pd.DataFrame:
 
 def compute_fragility_score_b(corr: pd.Series, pe: pd.Series, vol: pd.Series,
                               eigenvalue_ratio: pd.Series,
-                              vix_norm: pd.Series = None,
-                              ted_norm: pd.Series = None,
-                              yield_spread_norm: pd.Series = None) -> pd.Series:
+                              vix: pd.Series = None,
+                              dxy: pd.Series = None,
+                              try_usd: pd.Series = None,
+                              **_kwargs) -> pd.Series:
+    """Compute Model B fragility score — FIXED 6-component weights.
+
+    Formula:
+      score = (0.20×corr + 0.15×PE_inv + 0.10×vol + 0.10×eigenvalue
+               + 0.15×VIX + 0.30×TRY_weakness) * 100
+
+    TRY_weakness = 1 - norm(TRY_USD): near 1.0 when TRY is weak (crisis signal
+    for Turkey-specific crises that global correlation metrics miss).
+    DXY retained as RF feature but removed from score formula.
+
+    All components are min-max normalised to [0,1] over the full series.
     """
-    Compute Model B fragility score with macro signals.
-    
-    Formula: 0.25×corr + 0.20×PE_inv + 0.15×vol + 0.15×eigenvalue_ratio + 
-             0.10×TED + 0.10×VIX + 0.05×yield_spread
-    
-    All components normalized to [0,1] before weighting.
-    Handles missing macro signals gracefully by adjusting weights.
-    
-    Args:
-        corr: Series of mean rolling correlations
-        pe: Series of permutation entropy values
-        vol: Series of rolling volatility
-        eigenvalue_ratio: Series of eigenvalue ratios
-        vix_norm: Normalized VIX values (optional)
-        ted_norm: Normalized TED spread values (optional)
-        yield_spread_norm: Normalized yield spread values (optional)
-        
-    Returns:
-        Series of fragility scores (0-100)
-        
-    Requirements: 33.5, 33.6
-    """
-    # Min-max normalization function
-    def normalize(series):
-        """Normalize series to [0, 1] range using min-max scaling."""
-        min_val = series.min()
-        max_val = series.max()
-        if max_val == min_val:
-            return pd.Series(0.5, index=series.index)
-        return (series - min_val) / (max_val - min_val)
-    
-    # Normalize core components
-    corr_norm = normalize(corr)
-    pe_norm = normalize(pe)
-    pe_inv_norm = 1 - pe_norm  # Invert PE (lower PE = higher fragility)
-    vol_norm = normalize(vol)
-    eigenvalue_ratio_norm = normalize(eigenvalue_ratio)
-    
-    # Base weights for core components
-    weight_corr = 0.25
-    weight_pe = 0.20
-    weight_vol = 0.15
-    weight_eigenvalue = 0.15
-    
-    # Macro signal weights (may be adjusted if signals unavailable)
-    weight_ted = 0.10
-    weight_vix = 0.10
-    weight_yield = 0.05
-    
-    # Track which macro signals are available
-    available_macro = []
-    unavailable_macro = []
-    
-    # Check VIX availability
-    if vix_norm is not None and vix_norm.notna().sum() > 0:
-        available_macro.append(('VIX', weight_vix, vix_norm))
+
+    def _norm(s: pd.Series) -> pd.Series:
+        lo = s.quantile(0.02)
+        hi = s.quantile(0.98)
+        if hi == lo:
+            return pd.Series(0.5, index=s.index)
+        return ((s - lo) / (hi - lo)).clip(0, 1)
+
+    corr_n  = _norm(corr)
+    pe_inv  = 1.0 - _norm(pe)   # low PE = high fragility
+    vol_n   = _norm(vol)
+    eig_n   = _norm(eigenvalue_ratio)
+
+    vix_n = _norm(vix.reindex(corr.index).ffill().bfill()) if vix is not None else pd.Series(0.0, index=corr.index)
+
+    if try_usd is not None:
+        try_series = try_usd.reindex(corr.index).ffill().bfill()
+        try_weakness = 1.0 - _norm(try_series)  # high when TRY is weak
     else:
-        unavailable_macro.append(('VIX', weight_vix))
-        vix_norm = pd.Series(0, index=corr.index)
-        weight_vix = 0
-    
-    # Check TED spread availability
-    if ted_norm is not None and ted_norm.notna().sum() > 0:
-        available_macro.append(('TED', weight_ted, ted_norm))
-    else:
-        unavailable_macro.append(('TED', weight_ted))
-        ted_norm = pd.Series(0, index=corr.index)
-        weight_ted = 0
-    
-    # Check yield spread availability
-    if yield_spread_norm is not None and yield_spread_norm.notna().sum() > 0:
-        available_macro.append(('YIELD', weight_yield, yield_spread_norm))
-    else:
-        unavailable_macro.append(('YIELD', weight_yield))
-        yield_spread_norm = pd.Series(0, index=corr.index)
-        weight_yield = 0
-    
-    # Adjust weights if macro signals are missing
-    if unavailable_macro:
-        print("\nAdjusting fragility score weights due to missing macro signals:")
-        print(f"  Unavailable: {', '.join([name for name, _, in unavailable_macro])}")
-        
-        # Redistribute unavailable weights proportionally to core components
-        total_unavailable_weight = sum([w for _, w in unavailable_macro])
-        total_core_weight = weight_corr + weight_pe + weight_vol + weight_eigenvalue
-        
-        if total_core_weight > 0:
-            redistribution_factor = 1 + (total_unavailable_weight / total_core_weight)
-            weight_corr *= redistribution_factor
-            weight_pe *= redistribution_factor
-            weight_vol *= redistribution_factor
-            weight_eigenvalue *= redistribution_factor
-        
-        print(f"  Adjusted weights:")
-        print(f"    corr={weight_corr:.3f}, PE_inv={weight_pe:.3f}, vol={weight_vol:.3f}, eigenvalue={weight_eigenvalue:.3f}")
-        print(f"    VIX={weight_vix:.3f}, TED={weight_ted:.3f}, yield={weight_yield:.3f}")
-    else:
-        print("\nComputing Model B fragility score with all macro signals:")
-        print(f"  Weights: corr={weight_corr}, PE_inv={weight_pe}, vol={weight_vol}, eigenvalue={weight_eigenvalue}")
-        print(f"           VIX={weight_vix}, TED={weight_ted}, yield={weight_yield}")
-    
-    # Compute weighted fragility score
-    fragility = (weight_corr * corr_norm + 
-                weight_pe * pe_inv_norm + 
-                weight_vol * vol_norm + 
-                weight_eigenvalue * eigenvalue_ratio_norm +
-                weight_vix * vix_norm +
-                weight_ted * ted_norm +
-                weight_yield * yield_spread_norm)
-    
-    # Scale to [0, 100]
-    fragility_score = fragility * 100
-    
-    # Return NaN when core components are NaN
+        try_weakness = pd.Series(0.5, index=corr.index)
+
+    fragility_score = (
+        0.20 * corr_n    +
+        0.15 * pe_inv    +
+        0.10 * vol_n     +
+        0.10 * eig_n     +
+        0.15 * vix_n     +
+        0.30 * try_weakness
+    ) * 100.0
+
     mask = corr.isna() | pe.isna() | vol.isna() | eigenvalue_ratio.isna()
     fragility_score[mask] = np.nan
-    
-    print(f"\nModel B fragility score statistics:")
-    print(f"  Range: {fragility_score.min():.2f} to {fragility_score.max():.2f}")
-    print(f"  Mean: {fragility_score.mean():.2f}")
-    print(f"  Median: {fragility_score.median():.2f}")
-    print(f"  Std: {fragility_score.std():.2f}")
-    print(f"  NaN values: {fragility_score.isna().sum()}")
-    
+
+    print(f"\nModel B fragility score: {fragility_score.min():.1f}–{fragility_score.max():.1f}, "
+          f"mean={fragility_score.mean():.1f}, NaN={fragility_score.isna().sum()}")
     return fragility_score
+
+
+# ── lag features ──────────────────────────────────────────────────────────────
+
+LAG_FEATURES = ['DXY', 'TRY_USD', 'US_10Y_YIELD', 'BRENT', 'VIX']
+LAG_MONTHS   = [1, 3, 6, 12]
+
+
+def add_lag_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add lagged versions of key macro features.
+
+    Crises build 12-24 months before rupture — lag features give the RF
+    an early-warning signal.  Applied AFTER monthly resampling to avoid
+    look-ahead bias.
+    """
+    df = df.copy()
+    for feat in LAG_FEATURES:
+        if feat not in df.columns:
+            continue
+        for lag in LAG_MONTHS:
+            df[f'{feat}_lag{lag}m'] = df[feat].shift(lag)
+    print(f"Added {len(LAG_FEATURES) * len(LAG_MONTHS)} lag features")
+    return df
 
 
 def export_features(features_df: pd.DataFrame, filepath: str) -> None:

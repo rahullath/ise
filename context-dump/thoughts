@@ -1,0 +1,20 @@
+thoughts 
+
+predicting the next stock market crash
+
+because of assignment limitations we have to follow a two-pronged approach wherein - 
+
+1) we train our model on the dataset given and that's it - and run it on current day data to check if we can predict a crash or whatever
+
+2) we train our model on the dataset given + add extensive amount of data from 1960-2026 - using different metrics from S&P indices to VIX, neoliberal bs to actual metrics that were clear factors in GFC, Covid, dot-com bubble etc. and then test it with present day-data to get a fully functioning - live dashboard that can tell us if the market is likely to crash
+
+now for obvious reasons we cannot use millions of datasets - that would ideally help predict everything more accurately - but we can choose the best ones and train our (multiple different) models using various machine learning methods to help create the fragility clock + real-time dashboard that uses live data (if any - using some API perhaps) to give the most likely timespan in which the next crash will happen
+
+-
+concerns -
+the geopolitical situation impacts markets a lot - but how do we include that? the assignment's scope is so limited that anything I want to do seems like a high-level approach - but we have to figure out the best way to factor in qualitative, quantitative data from different categories and schools of thought to predict the market crash.
+
+3) then finally we can allow users to compare both the models - to understand how much information varies based on the model itself (multiple model per approach) and based on the data consumed by the models even if following the same basic code.
+
+
+the main goal is to make it clear that capitalism cannot survive because these bubbles burst - be it ai, dot-com, or something else, and the people who pay the price for it are retail investors and the government (i.e taxpayer funds) every single time, while the billionaires get bailouts and a free pass. the overproduction mess that exists in the current system is absolutely abhorrent - producing just for the fuck of it - increasing the GDP (worst metric for any measurement of growth) by simply buying and selling until the last person is left holding the trash produced. throwing goods away to keep the market-pricing constant - cause surplus value is more important than people having whatever they need. circular wealth transfer in the AI bubble, 80 billion+ animals killed per year just to throw most of it away, people renting their existence, everything requires a subscription model - and it has to be tiered ofcourse to make the poor pay for the worst service (that should be free) and keeping all profits instead of paying the working class that makes it all possible. offloading climate change to overexploited third world or 'global south' and cashing in carbon credits to get the net zero emission tag, going for wars every fucjing day - killing millions cause expansion is the only thing that can sustain this late stage imperialist empire. I can write a 500 page thesis on this ofcourse but yeah this small para rant is just to give you context that I don't want some basic ass stock market prediction that finance bros do to get a job in the industry - not interested in helping big businesses exploit more people by knowing when the market will crash (although it might be a part of the assignment so we will have to throw in something for the big capitalists to use I guess) 

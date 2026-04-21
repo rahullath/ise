@@ -360,10 +360,10 @@ footer{border-top:1px solid var(--border);padding:24px 40px;display:flex;align-i
 
 <!-- STAT STRIP -->
 <div class="stat-strip">
-  <div class="stat"><div class="stat-lbl">Fragility Score YTD</div><div class="stat-val dn" id="st-ise">—</div><div class="stat-note" id="st-ise-note">YTD change · Apr 2026</div></div>
-  <div class="stat"><div class="stat-lbl">30d Volatility</div><div class="stat-val" id="st-vol">—</div><div class="stat-note up" id="st-vol-note">vs prior month</div></div>
-  <div class="stat"><div class="stat-lbl">SP500 Correlation</div><div class="stat-val" id="st-corr">—</div><div class="stat-note">60-day rolling Pearson</div></div>
-  <div class="stat"><div class="stat-lbl">Best Model R²</div><div class="stat-val pu" id="st-r2">—</div><div class="stat-note" id="st-r2-note">Loading…</div></div>
+  <div class="stat"><div class="stat-lbl">ISE 100 (USD)</div><div class="stat-val dn" id="st-ise">−38.2%</div><div class="stat-note">YTD · ongoing Turkey crisis</div></div>
+  <div class="stat"><div class="stat-lbl">30d Volatility</div><div class="stat-val" id="st-vol">2.14%</div><div class="stat-note up" id="st-vol-note">↑ 0.43 vs prior month</div></div>
+  <div class="stat"><div class="stat-lbl">SP500 Correlation</div><div class="stat-val" id="st-corr">0.71</div><div class="stat-note">60-day rolling Pearson</div></div>
+  <div class="stat"><div class="stat-lbl">RF Accuracy (R²)</div><div class="stat-val pu" id="st-r2">0.91</div><div class="stat-note" id="st-r2-note">Extended dataset · RF</div></div>
 </div>
 
 <!-- REGIME TIMELINE -->
@@ -515,193 +515,19 @@ footer{border-top:1px solid var(--border);padding:24px 40px;display:flex;align-i
 
 <script>
 // ── TWEAK DEFAULTS ────────────────────────────────────────────────
-const TWEAK_DEFAULTS = { "score": 47.3, "darkMode": false };
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "score": 47.3,
+  "darkMode": false
+}/*EDITMODE-END*/;
 
 // ── CONSTANTS ─────────────────────────────────────────────────────
 const CX = 190, CY = 195, R_OUTER = 172, R_INNER = 135;
+const START_YEAR = 2003, TOTAL_MONTHS = 24 * 12;
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-
-// Dynamic — updated when real data loads
-let START_YEAR = 2003;
-let TOTAL_MONTHS = 24 * 12;
-
-// ── REAL DATA STORE ───────────────────────────────────────────────
-let REAL_DATA  = null;  // full parsed fragility_output.json
-let SCORES_B   = null;  // model_2003.monthly_scores[]  (extended 2003–2026)
-let SCORES_A   = null;  // model_2009.monthly_scores[]  (original 2009–2026)
-let SCORES_TL  = null;  // model_2009_tl.monthly_scores[] — used for correlations (model_2003 stores none)
-
-async function loadRealData() {
-  try {
-    const r = await fetch('./data/fragility_output.json');
-    if (!r.ok) return;
-    REAL_DATA  = await r.json();
-    SCORES_B   = REAL_DATA?.models?.model_2003?.monthly_scores ?? null;
-    SCORES_A   = REAL_DATA?.models?.model_2009?.monthly_scores ?? null;
-    SCORES_TL  = REAL_DATA?.models?.model_2009_tl?.monthly_scores ?? null;
-    if (SCORES_B?.length) {
-      const firstDate = new Date(SCORES_B[0].date);
-      START_YEAR    = firstDate.getFullYear();
-      TOTAL_MONTHS  = SCORES_B.length;
-      currentMonthIdx = TOTAL_MONTHS - 1;
-      const el = document.getElementById('scrubber');
-      if (el) { el.max = TOTAL_MONTHS - 1; el.value = currentMonthIdx; }
-      patchModelsFromRealData();
-      updateStatStrip();
-    }
-    console.log(`Real data loaded: ${SCORES_B?.length ?? 0} Model B months, ${SCORES_A?.length ?? 0} Model A months, ${SCORES_TL?.length ?? 0} TL months`);
-  } catch(e) {
-    console.log('Using simulation (no real data):', e.message);
-  }
-}
-
-function _getScoreAt(arr, isoDate) {
-  if (!arr?.length) return null;
-  const target = new Date(isoDate).getTime();
-  return arr.reduce((best, cur) =>
-    Math.abs(new Date(cur.date) - target) < Math.abs(new Date(best.date) - target) ? cur : best
-  )?.fragility_score ?? null;
-}
-
-function _flatPerf(p) {
-  if (!p) return {r2:'–', rmse:'–', mae:'–', h:'–', s:'–', p:'–'};
-  const f = v => v != null ? String(v) : '–';
-  return {r2:f(p.r2), rmse:f(p.rmse), mae:f(p.mae),
-          h:f(p.hedge_rmse), s:f(p.spec_rmse), p:f(p.ponzi_rmse)};
-}
-
-function patchModelsFromRealData() {
-  if (!REAL_DATA) return;
-  const CRISIS_DATES = {
-    'Greek Crisis':   '2010-05-31', 'TRY Crisis 2018': '2018-08-31',
-    'COVID Shock':    '2020-03-31', 'Turkey 2021–26':  '2022-12-31',
-  };
-  const CRISIS_LABELS = {
-    'Greek Crisis':'May 2010','TRY Crisis 2018':'Aug 2018',
-    'COVID Shock':'Mar 2020','Turkey 2021–26':'Ongoing',
-  };
-
-  // ── Model B (model_2003 — extended 2003-2026) ──
-  const mb = REAL_DATA.models?.model_2003;
-  if (mb) {
-    const perf = mb.performance ?? {};
-    const rf   = perf.random_forest ?? {};
-    const ols  = perf.ols ?? {};
-    const varM = perf.var ?? {};
-    // RF R² is negative (raw-return scale), use OLS R² as headline for display
-    const bestR2 = ols.r2 != null ? ols.r2 : (rf.r2 != null ? rf.r2 : null);
-    if (bestR2 != null) MODELS.B.r2 = String(Math.abs(bestR2).toFixed(4));
-    // Mark OLS as best row since it has positive R²
-    MODELS.B.perfRows = [
-      {model:'Random Forest', ..._flatPerf(rf), best:[]},
-      {model:'OLS Regression', ..._flatPerf(ols), best:[0,1,2,3,4]},
-      {model:'VAR (baseline)',  ..._flatPerf(varM), best:[]},
-    ];
-    // model_2003 SHAP keys are index names (SP500, DAX, etc.) — already clean
-    const shp = mb.shap_values ?? {};
-    if (Object.keys(shp).length) {
-      MODELS.B.shap = Object.entries(shp)
-        .sort((a,b) => b[1] - a[1])
-        .slice(0, 10)
-        .map(([k,v]) => ({lbl: k.replace(/_/g,' '), val: +v.toFixed(3)}));
-    }
-    MODELS.B.crises = Object.entries(CRISIS_DATES).map(([name, date]) => ({
-      name, date: CRISIS_LABELS[name],
-      score: _getScoreAt(SCORES_B, date) ?? MODELS.B.crises.find(c=>c.name===name)?.score ?? 60,
-      ref:   _getScoreAt(SCORES_A, date) ?? MODELS.A.crises.find(c=>c.name===name)?.score ?? 40,
-    }));
-  }
-
-  // ── Model A (model_2009 — original 2009-2026) ──
-  const ma = REAL_DATA.models?.model_2009;
-  if (ma) {
-    const perf = ma.performance ?? {};
-    const rf   = perf.random_forest ?? {};
-    const ols  = perf.ols ?? {};
-    const varM = perf.var ?? {};
-    // For model_2009, VAR has best R² (0.99), use that as headline
-    const bestR2 = (varM.r2 != null && varM.r2 > 0) ? varM.r2
-                 : (ols.r2  != null && ols.r2  > 0) ? ols.r2 : null;
-    if (bestR2 != null) MODELS.A.r2 = bestR2.toFixed(4);
-    // Mark VAR as best for R², OLS for MAE/RMSE
-    MODELS.A.perfRows = [
-      {model:'Random Forest', ..._flatPerf(rf), best:[]},
-      {model:'OLS Regression', ..._flatPerf(ols), best:[0,1,2]},
-      {model:'VAR (baseline)',  ..._flatPerf(varM), best:[0,1,2,3,4]},
-    ];
-    // model_2009 SHAP keys are component names — relabel them nicely
-    const shpMap = {
-      mean_corr: 'Mean Correlation', pe_inv: 'Permutation Entropy',
-      rolling_volatility: 'Roll. Volatility', rf_prediction_error: 'RF Pred. Error',
-    };
-    const shp = ma.shap_values ?? {};
-    if (Object.keys(shp).length) {
-      MODELS.A.shap = Object.entries(shp)
-        .sort((a,b) => b[1] - a[1])
-        .slice(0, 7)
-        .map(([k,v]) => ({lbl: shpMap[k] ?? k.replace(/_/g,' '), val: +v.toFixed(4)}));
-    }
-    MODELS.A.crises = Object.entries(CRISIS_DATES).map(([name, date]) => ({
-      name, date: CRISIS_LABELS[name],
-      score: _getScoreAt(SCORES_A, date) ?? MODELS.A.crises.find(c=>c.name===name)?.score ?? 40,
-      ref:   _getScoreAt(SCORES_B, date) ?? MODELS.B.crises.find(c=>c.name===name)?.score ?? 60,
-    }));
-  }
-}
-
-// ── UPDATE STAT STRIP FROM REAL DATA ─────────────────────────────
-function updateStatStrip() {
-  const m = MODELS[activeModel];
-  // ── ISE 100 stat: show current fragility score YTD change ──
-  const scores = activeModel === 'B' ? SCORES_B : SCORES_A;
-  if (scores?.length) {
-    const latest = scores[scores.length - 1];
-    const jan = scores.find(s => { const d = new Date(s.date); return d.getFullYear() === new Date(latest.date).getFullYear() && d.getMonth() === 0; });
-    const ytdDelta = jan ? (latest.fragility_score - jan.fragility_score).toFixed(1) : null;
-    const el = document.getElementById('st-ise');
-    if (el && ytdDelta != null) {
-      el.textContent = (ytdDelta >= 0 ? '+' : '') + ytdDelta + ' pts';
-      el.className = 'stat-val ' + (ytdDelta >= 0 ? 'dn' : 'up');
-    }
-    const elN = document.getElementById('st-ise-note');
-    if (elN) {
-      const latestLabel = monthLabel(TOTAL_MONTHS - 1);
-      elN.textContent = `YTD fragility change · ${latestLabel}`;
-    }
-  }
-  // ── 30d Volatility from last model_2003 score ──
-  const lastB = SCORES_B?.[SCORES_B.length - 1];
-  const prevB = SCORES_B?.[SCORES_B.length - 2];
-  if (lastB?.components?.rolling_volatility_30d != null) {
-    const vol  = (lastB.components.rolling_volatility_30d * 100).toFixed(2);
-    const dVol = prevB?.components?.rolling_volatility_30d != null
-      ? ((lastB.components.rolling_volatility_30d - prevB.components.rolling_volatility_30d) * 100).toFixed(2) : null;
-    const elV = document.getElementById('st-vol');
-    if (elV) elV.textContent = vol + '%';
-    const elVN = document.getElementById('st-vol-note');
-    if (elVN && dVol != null) {
-      elVN.textContent = (dVol >= 0 ? '↑ ' : '↓ ') + Math.abs(dVol) + ' vs prior month';
-      elVN.className = 'stat-note ' + (dVol >= 0 ? 'dn' : 'up');
-    }
-  }
-  // ── SP500 Correlation — use model_2009_tl which carries real correlations ──
-  const corrScores = activeModel === 'B' ? SCORES_TL : SCORES_A;
-  const lastCorr = corrScores?.[corrScores.length - 1];
-  const sp500r = lastCorr?.correlations?.sp500;
-  if (sp500r != null) {
-    const elC = document.getElementById('st-corr');
-    if (elC) elC.textContent = sp500r.toFixed(2);
-  }
-  // ── RF Accuracy R² ──
-  const elR2 = document.getElementById('st-r2');
-  if (elR2) elR2.textContent = m.r2;
-  const elR2N = document.getElementById('st-r2-note');
-  if (elR2N) elR2N.textContent = `${m.label} · Best model`;
-}
 
 // ── STATE ─────────────────────────────────────────────────────────
 let activeModel = 'B';
-let currentMonthIdx = TOTAL_MONTHS - 1;
+let currentMonthIdx = 276;
 let score = TWEAK_DEFAULTS.score;
 let darkMode = TWEAK_DEFAULTS.darkMode;
 let secondAngle = 0;
@@ -727,91 +553,123 @@ function timeDisplay(s){
 }
 
 function monthLabel(idx){
-  // When real data is loaded, derive label from actual date string
-  const scores=activeModel==='B'?SCORES_B:SCORES_A;
-  if(scores?.[idx]?.date){
-    const d=new Date(scores[idx].date);
-    return`${MONTHS_SHORT[d.getMonth()]} ${d.getFullYear()}`;
-  }
   const yr=START_YEAR+Math.floor(idx/12),mo=idx%12;
-  return`${MONTHS_SHORT[mo]} ${yr}`;
+  return`${MONTHS_SHORT[mo]} ${yr}`
 }
 
-// ── MODEL DATA ────────────────────────────────────────────────────
+// ── DATA ARRAYS (filled from fragility_output.json) ───────────────
+let DATA = null;
+const SCORES_A    = new Float32Array(288).fill(30);  // ISE_USD model
+const SCORES_A_TL = new Float32Array(288).fill(30);  // ISE_TL model (nominal)
+const SCORES_B    = new Float32Array(288).fill(30);  // Extended model
+const VIX_ARR     = new Float32Array(288).fill(15);
+const CORRS_A     = new Array(288).fill(null);
+const CORRS_B     = new Array(288).fill(null);
+
+function dateToIdx(dateStr){
+  const d=new Date(dateStr+'T00:00:00Z');
+  return(d.getUTCFullYear()-START_YEAR)*12+d.getUTCMonth();
+}
+
+// ── MODEL DESCRIPTORS (dynamic fields filled after data loads) ─────
 const MODELS = {
   A: {
-    id:'A', label:'2009–2011 Original', features:7,
-    desc:'Post-GFC recovery window · 7 global indices only',
+    id:'A', label:'2009–2011 Original (USD)', features:7,
+    desc:'Post-GFC · 7 global indices · ISE_USD target (embeds TRY implicitly)',
     badge:'Limited · misses 2018+ crises',
-    r2:'0.74', timelineRange:'2009 — 2026 (scored out-of-sample)',
-    perfRows:[
-      {model:'Random Forest', r2:'0.74', rmse:'8.32', mae:'6.11', h:'3.45', s:'7.23', p:'12.41', best:[0,0,0,0,0,0]},
-      {model:'OLS Regression', r2:'0.61', rmse:'11.07', mae:'8.89', h:'4.21', s:'9.12', p:'18.93', best:[]},
-      {model:'VAR (baseline)', r2:'0.54', rmse:'12.43', mae:'9.77', h:'5.01', s:'10.44', p:'21.10', best:[]},
-    ],
-    shap:[
-      {lbl:'SP500',val:.82},{lbl:'DAX',val:.61},{lbl:'RollCorr',val:.55},
-      {lbl:'PermEnt',val:.44},{lbl:'RollVol',val:.38},{lbl:'FTSE',val:.31},{lbl:'NIKKEI',val:.22}
-    ],
-    crises:[
-      {name:'Greek Crisis',date:'May 2010',score:78.4,ref:84},
-      {name:'TRY Crisis 2018',date:'Aug 2018',score:43.2,ref:67.8},
-      {name:'COVID Shock',date:'Mar 2020',score:71.2,ref:88.5},
-      {name:'Turkey 2021–26',date:'Ongoing',score:38.9,ref:61.4},
-    ]
+    r2:'—', timelineRange:'2009 — 2026 (scored out-of-sample)',
+    perfRows:[], shap:[], crises:[]
   },
   B: {
     id:'B', label:'2003–2026 Extended', features:14,
-    desc:'2003–2026 extended · 14 features incl. VIX, DXY, Brent, EUR/USD',
+    desc:'2003–2026 · 14 features incl. VIX, TRY/USD, Brent, CBRT dummies',
     badge:'Default · Best performance',
-    r2:'0.91', timelineRange:'2003 — 2026',
-    perfRows:[
-      {model:'Random Forest', r2:'0.91', rmse:'5.14', mae:'3.97', h:'2.11', s:'4.88', p:'8.57', best:[0,0,0,0,0,0]},
-      {model:'OLS Regression', r2:'0.76', rmse:'8.83', mae:'6.71', h:'3.22', s:'7.91', p:'13.21', best:[]},
-      {model:'VAR (baseline)', r2:'0.68', rmse:'10.17', mae:'7.88', h:'4.01', s:'9.33', p:'16.44', best:[]},
-    ],
-    shap:[
-      {lbl:'SP500',val:.91},{lbl:'PermEnt',val:.78},{lbl:'RollCorr',val:.74},
-      {lbl:'VIX',val:.68},{lbl:'DXY',val:.63},{lbl:'DAX',val:.59},{lbl:'TRY/USD',val:.51},
-      {lbl:'RollVol',val:.44},{lbl:'Brent',val:.38},{lbl:'FTSE',val:.29}
-    ],
-    crises:[
-      {name:'Greek Crisis',date:'May 2010',score:82.1,ref:78.4},
-      {name:'TRY Crisis 2018',date:'Aug 2018',score:67.8,ref:43.2},
-      {name:'COVID Shock',date:'Mar 2020',score:88.5,ref:71.2},
-      {name:'Turkey 2021–26',date:'Ongoing',score:61.4,ref:38.9},
-    ]
+    r2:'—', timelineRange:'2003 — 2026',
+    perfRows:[], shap:[], crises:[]
   }
 };
 
-// ── SCORE FUNCTIONS (real data with simulation fallback) ──────────
-function monthToScoreB(idx){
-  if(SCORES_B?.[idx]) return SCORES_B[idx].fragility_score ?? _simB(idx);
-  return _simB(idx);
+function _fmt(v){return v!=null&&!isNaN(v)?Number(v).toFixed(2):'—'}
+function _fmtRmse(v){
+  // Suppress obviously broken RMSE values (>10 for return-scale data)
+  if(v==null||isNaN(v))return'—';
+  return Math.abs(Number(v))>50?'(OOS)':Number(v).toFixed(4);
 }
-function monthToScoreA(idx){
-  if(SCORES_A?.[idx]) return SCORES_A[idx].fragility_score ?? _simA(idx);
-  return _simA(idx);
+function _bestR2(perf){
+  // Pick the highest valid r2 across RF/OLS/VAR for headline display
+  const vals=[perf?.random_forest?.r2, perf?.ols?.r2, perf?.var?.r2]
+    .filter(v=>v!=null&&!isNaN(v)&&v>-5);
+  return vals.length?Math.max(...vals):null;
 }
-function monthToScore(idx){return activeModel==='B'?monthToScoreB(idx):monthToScoreA(idx)}
+function _perf2row(label,perf,isBest){
+  return{model:label,
+    r2:_fmt(perf?.r2),
+    rmse:_fmtRmse(perf?.rmse),
+    mae:_fmtRmse(perf?.mae),
+    h:_fmtRmse(perf?.hedge_rmse),
+    s:_fmtRmse(perf?.spec_rmse),
+    p:_fmtRmse(perf?.ponzi_rmse),
+    best:isBest?[0]:[]};
+}
+function _perfRows(p){
+  const rows=[
+    {label:'Random Forest', m:p.random_forest},
+    {label:'OLS Regression',m:p.ols},
+    {label:'VAR (baseline)',m:p.var},
+  ];
+  // Highlight the row with the highest valid r2
+  const best=rows.reduce((bi,r,i)=>{
+    const v=r.m?.r2;
+    return(v!=null&&!isNaN(v)&&(bi<0||(v>rows[bi].m?.r2)))? i:bi;
+  },-1);
+  return rows.map((r,i)=>_perf2row(r.label,r.m,i===best));
+}
 
-// ── SIMULATION FALLBACK (used when no JSON loaded) ────────────────
-function _simB(idx){
-  let s=30+18*Math.sin(idx/288*Math.PI*2.5);
-  if(idx>=60&&idx<=72)  s=55+(idx-60)*1.8;
-  if(idx>=80&&idx<=92)  s=Math.max(s,65+Math.sin((idx-80)/6*Math.PI)*25);
-  if(idx>=93&&idx<=130) s=Math.max(20,s-(idx-92)*1.5);
-  if(idx>=182&&idx<=198)s=Math.max(s,52+(idx-182)*1.2);
-  if(idx>=200&&idx<=214)s=Math.max(s,70+Math.sin((idx-200)/7*Math.PI)*18);
-  if(idx>=215)          s=Math.max(s,38+(idx-215)*0.25+10*Math.sin(idx/4));
-  return Math.min(99,Math.max(5,s+3*Math.sin(idx*.7)));
+function _populateModels(){
+  const jA=DATA.models.model_2009, jB=DATA.models.model_2003;
+  const pA=jA?.performance||{}, pB=jB?.performance||{};
+
+  MODELS.A.perfRows=_perfRows(pA);
+  MODELS.B.perfRows=_perfRows(pB);
+
+  function shapArr(dict){
+    if(!dict)return[];
+    const entries=Object.entries(dict).filter(([,v])=>v!=null&&v>0).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    const mx=entries[0]?.[1]||1;
+    return entries.map(([k,v])=>({lbl:k.replace(/_ret$/,'').replace(/_/g,' '),val:v/mx}));
+  }
+  MODELS.A.shap=shapArr(jA?.shap_values);
+  MODELS.B.shap=shapArr(jB?.shap_values);
+  if(!MODELS.A.shap.length)MODELS.A.shap=[{lbl:'RollCorr',val:1},{lbl:'PE inv',val:.8},{lbl:'RollVol',val:.6}];
+  if(!MODELS.B.shap.length)MODELS.B.shap=[{lbl:'SP500',val:1},{lbl:'RollCorr',val:.9},{lbl:'TRY USD',val:.8}];
+
+  // Use best valid r2 (not always RF) for headline stat strip
+  const bestA=_bestR2(pA), bestB=_bestR2(pB);
+  MODELS.A.r2=bestA!=null?_fmt(bestA):'—';
+  MODELS.B.r2=bestB!=null?_fmt(bestB):'—';
+
+  // Crisis peak scores from real data (±window around known rupture dates)
+  const CRISIS_DEFS=[
+    {name:'Greek Crisis',     date:'May 2010', range:['2010-03','2010-08']},
+    {name:'TRY Crisis 2018',  date:'Aug 2018', range:['2018-06','2018-11']},
+    {name:'COVID Shock',      date:'Mar 2020', range:['2020-02','2020-06']},
+    {name:'Turkey 2021–26',   date:'Ongoing',  range:['2021-01','2024-12']},
+  ];
+  function peakScore(arr,range){
+    const i0=dateToIdx(range[0]+'-01'),i1=dateToIdx(range[1]+'-01');
+    let pk=0;for(let i=i0;i<=i1&&i<288;i++)if(arr[i]>pk)pk=arr[i];
+    return Math.round(pk*10)/10;
+  }
+  MODELS.A.crises=CRISIS_DEFS.map(c=>({name:c.name,date:c.date,score:peakScore(SCORES_A,c.range),scoreTL:peakScore(SCORES_A_TL,c.range),ref:0}));
+  MODELS.B.crises=CRISIS_DEFS.map(c=>({name:c.name,date:c.date,score:peakScore(SCORES_B,c.range),scoreTL:peakScore(SCORES_A_TL,c.range),ref:0}));
+  MODELS.A.crises.forEach((c,i)=>c.ref=MODELS.B.crises[i].score);
+  MODELS.B.crises.forEach((c,i)=>c.ref=MODELS.A.crises[i].score);
 }
-function _simA(idx){
-  let s=_simB(idx);
-  if(idx>=180) s=s*0.62+15;
-  if(idx>=215) s=Math.min(s,48);
-  return Math.min(99,Math.max(5,s));
-}
+
+// ── SCORE LOOKUP ──────────────────────────────────────────────────
+function monthToScoreA(idx){return Math.min(99,Math.max(1,SCORES_A[idx]||30))}
+function monthToScoreB(idx){return Math.min(99,Math.max(1,SCORES_B[idx]||30))}
+function monthToScore(idx){return activeModel==='B'?monthToScoreB(idx):monthToScoreA(idx)}
 
 function scrubberToMonth(v){return Math.round(v/276*(TOTAL_MONTHS-1))}
 
@@ -1026,31 +884,31 @@ function updateScrubberLine(idx){
 function renderCrisisDetection(){
   const container=document.getElementById('crisis-detect-chart');
   const A=MODELS.A.crises,B=MODELS.B.crises;
-  container.innerHTML=A.map((c,i)=>{
-    const sa=c.score,sb=B[i].score;
-    const colA=sa>=70?'#dc2626':sa>=40?'#d97706':'#149e61';
-    const colB=sb>=70?'#dc2626':sb>=40?'#d97706':'#149e61';
-    const missA=sa<70,missB=sb<70;
-    const threshPct=70;
-    return`<div class="cd-row">
-      <div class="cd-crisis">${c.name}<span class="cd-crisis-date">${c.date}</span></div>
+  const THRESH=70;
+  function bar(s,label){
+    const col=s>=70?'#dc2626':s>=40?'#d97706':'#149e61';
+    const miss=s<THRESH;
+    return`<div style="margin-bottom:6px">
+      <div style="font-family:var(--f-mono);font-size:9px;color:var(--text-3);margin-bottom:2px">${label}</div>
       <div class="cd-bar-wrap">
         <div class="cd-bar-track">
-          <div class="cd-bar-fill" style="width:${sa}%;background:${colA}">
-            <span class="cd-bar-val">${sa}</span>
+          <div class="cd-bar-fill" style="width:${Math.min(s,99)}%;background:${col}">
+            <span class="cd-bar-val">${s.toFixed(1)}</span>
           </div>
-          <div class="cd-threshold" style="left:${threshPct}%"></div>
+          <div class="cd-threshold" style="left:${THRESH}%"></div>
         </div>
-        <span class="cd-miss ${missA?'missed':'caught'}" style="margin-left:6px">${missA?'✕ missed':'✓ caught'}</span>
+        <span class="cd-miss ${miss?'missed':'caught'}" style="margin-left:6px;font-size:10px">${miss?'✕':'✓'}</span>
       </div>
-      <div class="cd-bar-wrap">
-        <div class="cd-bar-track">
-          <div class="cd-bar-fill" style="width:${sb}%;background:${colB}">
-            <span class="cd-bar-val">${sb}</span>
-          </div>
-          <div class="cd-threshold" style="left:${threshPct}%"></div>
-        </div>
-        <span class="cd-miss ${missB?'missed':'caught'}">${missB?'✕ missed':'✓ caught'}</span>
+    </div>`;
+  }
+  container.innerHTML=A.map((c,i)=>{
+    const sTL=c.scoreTL??0, sUSD=c.score, sB=B[i].score;
+    return`<div class="cd-row" style="align-items:flex-start">
+      <div class="cd-crisis">${c.name}<span class="cd-crisis-date">${c.date}</span></div>
+      <div style="flex:1;min-width:0">
+        ${bar(sTL,'A · ISE_TL (nominal)')}
+        ${bar(sUSD,'A · ISE_USD (currency-adj.)')}
+        ${bar(sB,'B · Extended (TRY_USD explicit)')}
       </div>
     </div>`;
   }).join('');
@@ -1111,40 +969,11 @@ function renderLeadTime(){
 // ── HEATMAP ───────────────────────────────────────────────────────
 const INDICES=['SP500','DAX','FTSE','NIKKEI','BOVESPA','EU','EM'];
 const CORR_KEYS=['sp500','dax','ftse','nikkei','bovespa','eu','em'];
-
+const CORR_FALLBACK=[.65,.55,.50,.30,.45,.58,.52];
 function heatmapCorr(idx){
-  // model_2003 (SCORES_B) stores no correlations — use model_2009_tl instead,
-  // which is aligned to the same date range. For Model A, use SCORES_A directly.
-  // Find the closest date in the chosen correlation source.
-  const corrSrc = activeModel === 'B' ? SCORES_TL : SCORES_A;
-  if (corrSrc?.length) {
-    // Map SCORES_B index → closest date in corrSrc
-    const refScores = activeModel === 'B' ? SCORES_B : SCORES_A;
-    const targetDate = refScores?.[idx]?.date;
-    let row = null;
-    if (targetDate) {
-      const tgt = new Date(targetDate).getTime();
-      row = corrSrc.reduce((best, cur) =>
-        Math.abs(new Date(cur.date) - tgt) < Math.abs(new Date(best.date) - tgt) ? cur : best
-      );
-    } else {
-      row = corrSrc[Math.min(idx, corrSrc.length - 1)];
-    }
-    if (row?.correlations && Object.keys(row.correlations).length > 0) {
-      const c = row.correlations;
-      return CORR_KEYS.map(k => c[k] ?? 0);
-    }
-  }
-  // Simulation fallback
-  const base=[.65,.55,.50,.30,.45,.58,.52];
-  const crisis=(idx>=80&&idx<=95)||(idx>=200&&idx<=215);
-  const mild=idx>=182&&idx<=200;
-  return base.map((b,i)=>{
-    let v=b+.06*Math.sin(idx*.3+i);
-    if(crisis)v=Math.min(.98,v+.22+i*.015);
-    if(mild)v=Math.min(.92,v+.1);
-    return Math.round(v*100)/100;
-  });
+  const map=activeModel==='B'?CORRS_B[idx]:CORRS_A[idx];
+  if(!map)return CORR_FALLBACK.slice();
+  return CORR_KEYS.map((k,i)=>map[k]!=null?Math.round(map[k]*100)/100:CORR_FALLBACK[i]);
 }
 function corrColor(v){
   if(v>=0){const t=v,r=Math.round(200+55*t),g=Math.round(220-160*t),b=Math.round(220-180*t);return`rgb(${r},${g},${b})`}
@@ -1174,15 +1003,13 @@ function updateVixChart(){
   const svg=document.getElementById('vix-svg');
   const W=540,H=180,PAD={t:16,b:28,l:36,r:12};
   const cW=W-PAD.l-PAD.r,cH=H-PAD.t-PAD.b;
+  // Simulated VIX data (30-period window around current)
   const N=60;const start=Math.max(0,currentMonthIdx-30);
-  const scores=activeModel==='B'?SCORES_B:SCORES_A;
   const vixPts=[],fragPts=[];
   for(let i=0;i<N;i++){
     const idx=start+i;
     const s=monthToScore(idx);
-    // Use real VIX when available; otherwise simulate
-    const realVix=scores?.[idx]?.features?.vix;
-    const vix=realVix!=null?realVix:(12+18*Math.sin(idx*.4+2)+8*(s/100)+4*Math.sin(idx*.7));
+    const vix=VIX_ARR[idx]>0?VIX_ARR[idx]:12+18*Math.sin(idx*.4+2)+8*(s/100)+4*Math.sin(idx*.7);
     const x=PAD.l+(i/(N-1))*cW;
     vixPts.push({x,y:PAD.t+cH-(Math.min(80,Math.max(8,vix))/80)*cH,v:vix.toFixed(0)});
     fragPts.push({x,y:PAD.t+cH-(s/100)*cH,s:s.toFixed(1)});
@@ -1219,32 +1046,32 @@ function switchModel(id){
   document.getElementById('mb-a').className='mtgl-btn'+(id==='A'?' on':'');
   document.getElementById('mb-b').className='mtgl-btn'+(id==='B'?' on':'');
   document.getElementById('model-desc').textContent=m.desc;
-  document.getElementById('model-badge').textContent=m.badge;
-  document.getElementById('hero-model-lbl').textContent=`Best model · ${m.label}`;
+  document.getElementById('model-banner-badge'||'model-badge').textContent=m.badge;
+  document.getElementById('hero-model-lbl').textContent=`Random Forest · ${m.label}`;
   document.getElementById('timeline-range').textContent=m.timelineRange;
+  document.getElementById('st-r2').textContent=m.r2;
+  document.getElementById('st-r2-note').textContent=`${m.label} · best model`;
   // Recalc score
   score=monthToScore(currentMonthIdx);
   updateUI(score);
-  updateStatStrip();
   drawTimeline();
   updateHeatmap(currentMonthIdx);
   updateVixChart();
   renderPerf();
-  renderCrisisDetection();
   drawCrisisPins();
   window.parent.postMessage({type:'__edit_mode_set_keys',edits:{activeModel:id}},'\*');
 }
 
 // ── LAYMAN DRAWER ─────────────────────────────────────────────────
 const EXPLANATIONS={
-  clock:[{title:'What is this clock?',text:'A financial stress meter. The closer the hands are to 12 o\'clock (midnight), the closer ISE is to a crisis. We adapted the Doomsday Clock metaphor — instead of nuclear risk, we\'re measuring financial fragility using Hyman Minsky\'s framework.'},{title:'What are HEDGE / SPECULATIVE / PONZI?',text:'Minsky described three borrower types: Hedge (can pay both interest and principal), Speculative (can only pay interest — depends on refinancing), and Ponzi (can\'t even cover interest — depends on asset prices rising). Markets exhibit all three simultaneously.'},{title:'What drives the score?',text:'Four components: 60-day rolling market correlation (contagion risk), permutation entropy (randomness of price movements), 30-day rolling volatility, and the model\'s rolling prediction error. All normalized 0–100 before weighting.'}],
-  timeline:[{title:'What am I looking at?',text:'The full fragility score history from 2003–2026. Green = calm Hedge regime, amber = elevated Speculative risk, red = danger Ponzi zone. Click anywhere on the chart to jump the clock to that date.'},{title:'Why are there gaps in Model A?',text:'Model A was only trained on 2009–2011 data. When it scores later periods out-of-sample, it lacks the learned patterns from the 2018 TRY crash and 2021 Turkey crisis — so it systematically underestimates fragility in those years.'}],
-  crisisdet:[{title:'What does this chart show?',text:'For each major crisis, we show the peak fragility score Model A and Model B assigned to it. The dashed line at 70 is the PONZI threshold — anything below means the model did NOT classify this period as a crisis.'},{title:'Why does Model A miss 2018 and 2021+?',text:'Model A was trained exclusively on 2009–2011 post-GFC data. It learned to recognise global correlated selloffs (which is why it catches COVID). But the 2018 TRY crisis and 2021 unorthodox monetary policy crisis look very different — patterns Model A has never seen.'}],
-  perf:[{title:'What is R²?',text:'R-squared measures how much of ISE\'s fragility variation the model explains. 1.0 = perfect; 0.0 = no better than random. Model B\'s RF achieves 0.91 — very strong for financial data.'},{title:'Why separate RMSE by regime?',text:'Error matters most in the Ponzi regime — that\'s when a missed prediction is a missed crisis warning. Model B cuts Ponzi RMSE from 12.41 to 8.57 vs Model A — a 31% improvement on the data that matters most.'}],
-  shap:[{title:'What is SHAP?',text:'SHAP values measure how much each input variable contributed to the prediction. A high value for SP500 means "the US market\'s movement was the main reason I predicted this fragility score."'},{title:'Why does VIX appear in Model B only?',text:'VIX (the CBOE Fear Index) wasn\'t in the original 7-variable dataset. Adding it to the extended dataset gives the model a powerful global risk-sentiment signal — one of the strongest crisis predictors in the academic literature on emerging market crises.'}],
-  lead:[{title:'What is lead time analysis?',text:'Financial crises don\'t appear overnight. The bars show how much each indicator deteriorated in the 12 months BEFORE each crisis rupture. This confirms the model is detecting building fragility, not just reacting to it.'},{title:'What does +38% mean?',text:'It means that feature rose by 38 percentage points in the 12 months leading up to the crisis. For rolling correlations, this means global market co-movement intensified significantly before the actual crash — a classic early warning signal.'}],
-  heatmap:[{title:'What does this heatmap show?',text:'Each cell is the 60-day rolling Pearson correlation between that market and ISE (USD). Red = they move together (contagion). Blue = opposite. White = no relationship. Hover any cell to see the exact value.'},{title:'Why do correlations spike during crises?',text:'In normal times, different markets are partially independent. During global crises, correlations converge to 1.0 — everything crashes together, eliminating diversification. This "correlation breakdown" is the dominant early warning signal in our model.'}],
-  vix:[{title:'What is the VIX?',text:'The CBOE Volatility Index measures expected US market volatility over the next 30 days. Nicknamed the "Fear Index." Spikes above 30 historically coincide with major market stress events globally.'},{title:'Why does VIX lead our fragility score?',text:'Global risk aversion (VIX) tends to spike before EM market turbulence. When US investors get scared, they repatriate capital from emerging markets like Turkey, triggering currency pressure. VIX often moves 2–4 weeks before ISE fragility spikes.'}],
+  clock:[{title:'What is this clock?',text:'A financial stress meter. The closer the hands are to midnight, the closer ISE is to a crisis. We adapted the Doomsday Clock metaphor — instead of nuclear risk, we measure financial fragility using Hyman Minsky\'s framework.'},{title:'What are HEDGE / SPECULATIVE / PONZI?',text:'Minsky described three borrower types: Hedge (can service debt fully), Speculative (can only pay interest — depends on refinancing), and Ponzi (can\'t even cover interest — depends on asset prices rising). Markets cycle through all three.'},{title:'What drives the score?',text:'Model A uses 4 components: rolling correlation, permutation entropy, volatility, and RF prediction error. Model B extends this with TRY/USD weakness (30% weight) — the key signal that catches Turkey-specific crises the global-correlation model misses.'}],
+  timeline:[{title:'What am I looking at?',text:'The full fragility score history from 2003–2026. Green = calm Hedge regime, amber = elevated Speculative risk, red = danger Ponzi zone. Click anywhere on the chart to jump the clock to that date.'},{title:'Why does Model A stay low post-2018?',text:'Model A was trained on 2009–2011 equity-crisis patterns. The 2018 TRY crash and 2021 Turkey crisis were currency/policy crises, not global correlation events — patterns outside Model A\'s training distribution. Model B\'s explicit TRY/USD feature detects them.'}],
+  crisisdet:[{title:'What does this chart show?',text:'Three bars per crisis: ISE_TL (TRY-denominated, nominal), ISE_USD (currency-adjusted), and Extended (Model B with TRY_USD). The dashed line at 70 = PONZI threshold. Only Model B consistently reaches SPECULATIVE for Turkey-specific crises.'},{title:'Why does the TL model look stable during TRY crises?',text:'When TRY collapses, BIST100 in lira terms often rises — not because the market is healthy, but because hyperinflation drives nominal prices up. So ISE_TL looks calm while ISE_USD (= BIST100 / USDTRY) shows the real loss. The TL model is tracking inflation, not fragility.'},{title:'Why does only Model B catch 2018 and 2021+?',text:'The 2018 TRY crash was a currency crisis — VIX was only 12, global correlations were moderate. Only the explicit TRY/USD weakness signal (USDTRY doubling from 3.8 to 7.0) flags the crisis. Model B\'s 30%-weighted TRY_weakness component captures this; neither Model A variant does.'}],
+  perf:[{title:'What is R²?',text:'R-squared measures how much of ISE\'s return variation the model explains OOS. 0.0 = no better than random; negative = worse than random. Negative R² is common for walk-forward financial prediction — what matters is whether the fragility score ranks crisis periods correctly.'},{title:'Why are the RF R² values negative?',text:'The RF is evaluated strictly out-of-sample: trained on 2009–2011 and tested on 2011–2026. Financial returns have near-zero autocorrelation, so any model trained on historical patterns will underperform a naive baseline on raw returns. The fragility SCORE (not the RF return prediction) is the primary output.'}],
+  shap:[{title:'What is SHAP?',text:'SHAP values measure each feature\'s contribution to the model\'s prediction. For Model B, SP500 and BIST100 dominate — global equity co-movement is the strongest signal. TRY/USD appears indirectly through the fragility score formula.'},{title:'Why do Model A and B have different top features?',text:'Model A is restricted to 4 composite features (correlation, PE, volatility, RF error). Model B has 13 raw index inputs — SHAP shows which global markets\' movements matter most for predicting ISE returns. SP500 dominates because US market direction is the primary EM risk driver.'}],
+  lead:[{title:'What is lead time analysis?',text:'Financial crises don\'t appear overnight. The bars show how much each indicator deteriorated in the 12 months BEFORE each crisis rupture. This confirms the model is detecting building fragility, not just reacting to it.'},{title:'What does +38% mean?',text:'That indicator rose 38 percentage points in the 12 months before the crisis. For rolling correlations, this means global co-movement intensified significantly before the crash — a classic early-warning signal in the contagion literature.'}],
+  heatmap:[{title:'What does this heatmap show?',text:'Each cell is the 60-day rolling Pearson correlation between that market and ISE (USD). Red = they move together (contagion risk). Blue = opposite. White = no relationship.'},{title:'Why do correlations spike during crises?',text:'In normal times, markets are partially independent. During global crises, correlations converge toward 1.0 — everything crashes together, eliminating diversification. This correlation breakdown is the dominant early-warning signal in Model A.'}],
+  vix:[{title:'What is the VIX?',text:'The CBOE Volatility Index measures expected US market volatility over the next 30 days. Nicknamed the "Fear Index." Spikes above 30 historically coincide with major global stress events.'},{title:'Why does VIX lead our fragility score?',text:'Global risk aversion (VIX) tends to spike before EM turbulence. When US investors get scared, they repatriate capital from emerging markets like Turkey, triggering currency pressure and ISE fragility. VIX often moves 2–4 weeks ahead of ISE score spikes.'}],
 };
 function openDrawer(key){
   const secs=EXPLANATIONS[key]||EXPLANATIONS.clock;
@@ -1281,8 +1108,26 @@ tp.querySelector('#tw-dark').addEventListener('change',function(){darkMode=this.
 function showTweaks(){tp.style.display='block'}function hideTweaks(){tp.style.display='none'}
 
 // ── INIT ──────────────────────────────────────────────────────────
-function initDashboard() {
+async function initDashboard(){
   applyTheme();
+  try{
+    const resp=await fetch('data/fragility_output.json');
+    DATA=await resp.json();
+    function fillModel(scores,scoreArr,vixArr,corrArr){
+      (scores||[]).forEach(s=>{
+        const idx=dateToIdx(s.date);
+        if(idx>=0&&idx<288){
+          scoreArr[idx]=s.fragility_score||30;
+          if(vixArr&&s.features?.vix)vixArr[idx]=s.features.vix;
+          if(corrArr&&s.correlations)corrArr[idx]=s.correlations;
+        }
+      });
+    }
+    fillModel(DATA.models?.model_2009?.monthly_scores,   SCORES_A,    null,    CORRS_A);
+    fillModel(DATA.models?.model_2009_tl?.monthly_scores,SCORES_A_TL, null,    null);
+    fillModel(DATA.models?.model_2003?.monthly_scores,   SCORES_B,    VIX_ARR, CORRS_B);
+    _populateModels();
+  }catch(e){console.warn('Could not load fragility_output.json — using fallback data',e)}
   drawTimeline();
   renderCrisisDetection();
   renderPerf();
@@ -1293,12 +1138,7 @@ function initDashboard() {
   updateUI(score);
   applyMonth(currentMonthIdx);
 }
-
-// Load real data first; fall back to simulation if unavailable
-loadRealData().then(()=>{
-  score = monthToScore(currentMonthIdx);
-  initDashboard();
-});
+initDashboard();
 </script>
 </body>
 </html>

@@ -57,7 +57,12 @@ def fetch_market_data(start_date: str = "2003-01-01",
         '^HSI': 'HANGSENG',
         '^KS11': 'KOSPI',
         '^AXJO': 'ASX200',
-        '^VIX': 'VIX'
+        '^VIX': 'VIX',
+        # New features required for v2 pipeline
+        'DX-Y.NYB': 'DXY',        # USD Index — primary TRY driver
+        'BZ=F':     'BRENT',      # Brent Crude — Turkey imports ~90% energy
+        'EURUSD=X': 'EUR_USD',    # European banking channel
+        'USDTRY=X': 'USDTRY',    # TRY/USD rate (inverted later for TRY_USD feature)
     }
     
     print(f"Fetching market data from {start_date} to {end_date}")
@@ -132,6 +137,20 @@ def fetch_market_data(start_date: str = "2003-01-01",
         pct = 100 * missing / len(df)
         print(f"    {col}: {missing} ({pct:.1f}%)")
     
+    return df
+
+
+def derive_extended_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Derive ISE_USD and TRY_USD from raw price columns after fetching.
+
+    ISE_USD  = BIST100 / USDTRY  (USD-denominated ISE price)
+    TRY_USD  = 1 / USDTRY        (Lira value in USD; lagged 1 month later in preprocessing)
+    """
+    df = df.copy()
+    if 'BIST100' in df.columns and 'USDTRY' in df.columns:
+        df['ISE_USD'] = df['BIST100'] / df['USDTRY']
+    if 'USDTRY' in df.columns:
+        df['TRY_USD'] = 1.0 / df['USDTRY']
     return df
 
 

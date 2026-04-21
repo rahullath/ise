@@ -14,8 +14,61 @@ import sys
 import warnings
 
 # Import Model B data fetchers
-from fetch_market_data import fetch_market_data, handle_missing_data as handle_market_missing, validate_data as validate_market
+from fetch_market_data import fetch_market_data, derive_extended_features, handle_missing_data as handle_market_missing, validate_data as validate_market
 from fetch_macro_data import fetch_macro_data, resample_to_daily, handle_missing_data as handle_macro_missing, validate_data as validate_macro
+
+# CBRT governor turnover dates — each caused immediate TRY spike
+# Binary monthly dummy: 1 on the month of the firing, else 0
+CBRT_EVENTS = {
+    '2019-03': 1,  # Murat Cetinkaya fired
+    '2019-07': 1,  # Murat Uysal appointed after predecessor dismissed
+    '2020-11': 1,  # Murat Uysal fired
+    '2021-03': 1,  # Naci Agbal fired (only 4 months in office)
+}
+
+
+def add_cbrt_governor_dummy(df: pd.DataFrame) -> pd.DataFrame:
+    """Add binary monthly dummy for CBRT governor dismissal events.
+
+    Creates a daily column (constant within each month) set to 1 on months
+    where the CBRT governor was fired.
+    """
+    df = df.copy()
+    month_keys = df.index.to_period('M').astype(str)
+    df['cbrt_governor_change'] = month_keys.map(CBRT_EVENTS).fillna(0).astype(int)
+    return df
+
+
+def resample_to_monthly(df: pd.DataFrame) -> pd.DataFrame:
+    """Resample daily data to monthly (last trading day of each month).
+
+    Scores and regimes use the end-of-month snapshot.
+    Returns/volatility components use the monthly mean.
+    """
+    agg = {}
+    scalar_cols = ['fragility_score', 'regime', 'mean_corr', 'permutation_entropy',
+                   'rolling_volatility', 'eigenvalue_ratio']
+    for col in scalar_cols:
+        if col in df.columns:
+            agg[col] = 'last' if col in ('fragility_score', 'regime') else 'mean'
+
+    # All numeric columns not in scalar_cols → mean
+    for col in df.select_dtypes(include='number').columns:
+        if col not in agg:
+            agg[col] = 'mean'
+
+    monthly = df.resample('ME').agg(agg)
+
+    # Correlation pair columns → end-of-month snapshot
+    corr_cols = [c for c in df.columns if '_corr' in c.lower() or
+                 (any(c.startswith(idx) for idx in ['SP500','DAX','FTSE','NIKKEI',
+                                                     'BOVESPA','EU','EM','BIST100'])
+                  and '_' in c)]
+    for col in corr_cols:
+        if col not in monthly.columns and col in df.columns:
+            monthly[col] = df[col].resample('ME').last()
+
+    return monthly.dropna(subset=['fragility_score']) if 'fragility_score' in monthly.columns else monthly
 
 
 def merge_market_and_macro(market_df: pd.DataFrame, macro_df: pd.DataFrame) -> pd.DataFrame:
@@ -309,6 +362,7 @@ def run_preprocessing_pipeline(api_key: str = None,
     # Step 1: Fetch market data
     print("\n[1/7] Fetching market data from yfinance...")
     market_df = fetch_market_data(start_date=start_date, end_date=end_date)
+    market_df = derive_extended_features(market_df)  # ISE_USD, TRY_USD from BIST100/USDTRY
     market_df = handle_market_missing(market_df, max_gap=5)
     validate_market(market_df)
     
@@ -323,6 +377,10 @@ def run_preprocessing_pipeline(api_key: str = None,
     print("\n[3/7] Merging market and macro data...")
     merged_df = merge_market_and_macro(market_df, macro_df)
     
+    # Step 3b: Add CBRT governor dummy (hardcoded events, no API)
+    print("\n[3b] Adding CBRT governor dummy...")
+    merged_df = add_cbrt_governor_dummy(merged_df)
+
     # Step 4: Handle missing values
     print("\n[4/7] Handling missing values...")
     clean_df = handle_missing_values(merged_df, max_gap=5)
